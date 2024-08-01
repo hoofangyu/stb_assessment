@@ -1,0 +1,541 @@
+---
+title: "STB Assessment"
+author: "Fang Yu"
+date: "2024-07-29"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE, message = FALSE) 
+options(scipen = 999)
+library(tidyverse)
+library(readxl)
+library(klaR)
+```
+
+### Question 1
+```{r}
+#Setup for Question 1
+setwd("D:/Projects/stb_assessment") #Set to repository directory
+data = read_excel("data/mock_survey_data_3.xlsx")
+```
+#### a)	Describe the approach you will take and data fields you would look into when it comes to data preparation 
+
+##### Preliminary Inspection
+```{r}
+glimpse(data)
+```
+
+```{r}
+# Fixing column names for occupation
+data <- rename(data, Occupation = `Occupation...17`, Sector = `Occupation...18`)
+```
+
+##### Data Cleaning
+
+```{r}
+# Convert to appropriate data types
+shopping_columns <- grep("^shopping_", names(data), value = TRUE)
+#travel_columns <- grep("^Travel", names(data), value = TRUE)
+
+# Convert identified columns to double
+data[shopping_columns] <- lapply(data[shopping_columns], as.double)
+#data[travel_columns] <- lapply(data[travel_columns], as.double)
+```
+
+```{r}
+# Checking for Missing Values
+missing_values <- colSums(is.na(data))
+print("Missing Values:")
+print(missing_values)
+
+# Checking for Duplicates
+duplicates <- sum(duplicated(data))
+print("Duplicates:")
+print(duplicates)
+```
+```{r}
+# Checking if case is a unique identifier
+data %>% count(case) %>% arrange(desc(n))
+```
+```{r}
+# Give NA cases unique identifiers
+max_case <- max(data$case, na.rm = TRUE)
+
+# Generate unique values for NA entries
+data <- data %>%
+  mutate(case = ifelse(is.na(case), max_case + row_number(), case))
+```
+
+```{r}
+# Fixing shopping_xxx values
+data = data %>%
+  mutate(shopping_fash = ifelse(is.na(shopping_fash), 0, shopping_fash),
+         shopping_food = ifelse(is.na(shopping_food), 0, shopping_food),
+         shopping_gifts = ifelse(is.na(shopping_gifts), 0, shopping_gifts),
+         shopping_others = ifelse(is.na(shopping_others), 0, shopping_others),
+         shopping_any = shopping_fash + shopping_jewllery + shopping_watches 
+         + shopping_wellness + shopping_gifts + shopping_consumertech
+         + shopping_antiques + shopping_others)
+```
+
+```{r}
+# Check for missing values across all three terminal
+missing_rows <- data %>%
+  filter(is.na(Air_Terminal) & is.na(Sea_Terminal) & is.na(Land_Terminal))
+
+# Display the rows with all three features missing
+print(missing_rows)
+```
+```{r}
+# Find most frequent terminal for tourists from Vietnam, Thailand and Italy
+data %>% filter(`Country of Residence` == "Vietnam") %>% count(Land_Terminal) %>% arrange(desc(n))
+
+data %>% filter(`Country of Residence` == "Vietnam") %>% count(Sea_Terminal) %>% arrange(desc(n))
+
+data %>% filter(`Country of Residence` == "Vietnam") %>% count(Air_Terminal) %>% arrange(desc(n))
+
+data %>% filter(`Country of Residence` == "Thailand") %>% count(Land_Terminal) %>% arrange(desc(n))
+
+data %>% filter(`Country of Residence` == "Thailand") %>% count(Sea_Terminal) %>% arrange(desc(n))
+
+data %>% filter(`Country of Residence` == "Thailand") %>% count(Air_Terminal) %>% arrange(desc(n))
+
+data %>% filter(`Country of Residence` == "Italy") %>% count(Land_Terminal) %>% arrange(desc(n))
+
+data %>% filter(`Country of Residence` == "Italy") %>% count(Sea_Terminal) %>% arrange(desc(n))
+
+data %>% filter(`Country of Residence` == "Italy") %>% count(Air_Terminal) %>% arrange(desc(n))
+```
+```{r}
+# Filling in Missing Values for Terminal
+data <- data %>%
+  mutate(
+    Air_Terminal = ifelse(case == 699, 2, Air_Terminal),
+    Air_Terminal = ifelse(case == 811, 3, Air_Terminal),
+    Air_Terminal = ifelse(case == 824, 1, Air_Terminal)
+  )
+```
+
+```{r}
+# Filling in Missing Values for Main Hotel
+max_hotel <- max(data$MainHotel, na.rm = TRUE)
+
+# Generate unique values for NA entries
+data <- data %>%
+  mutate(MainHotel = ifelse(is.na(MainHotel), as.character(as.double(max_hotel) + 1), MainHotel),
+         MainHotel = ifelse(MainHotel %in% c(991,992,993,994,999,9996,9999),as.character(as.double(max_hotel) + 1), MainHotel))
+```
+
+##### Exploratory Data Analysis
+
+```{r}
+# Viewing Summary Statistics
+summary(data)
+```
+
+#### b) Highlight the data idiosyncrasies / issues you found in this dataset and how would you deal with it.
+
+##### Negative Values for Expenditure
+
+```{r}
+# Setting `tototh` column values to zero is negative
+data <- data %>%
+  mutate(tototh = ifelse(tototh < 0, 0, tototh))
+
+# Correcting total expenditure column
+data <- data %>%
+  mutate(tot.exp = totacc + totfnb + tottran + totbiz + totedu + totmedi + tototh + totshopping_rep)
+```
+
+##### Main Purpose of Visit does not match Purpose of Visit
+
+```{r}
+# Main Purpose of Visit does not Match Purpose of Visit
+data %>% filter(`Purpose of Visit` == "Healthcare + Accompanying Pax") %>% dplyr::select("Main Purpose of Visit" ) %>% distinct()
+```
+```{r}
+# Obtain all distinct purpose of visits into a vector
+specific_purposes = data %>% dplyr::select(`Main Purpose of Visit`) %>% distinct() %>% pull(`Main Purpose of Visit`)
+general_purposes = data %>% dplyr::select(`Purpose of Visit`) %>% distinct() %>% pull(`Purpose of Visit`)
+
+print(general_purposes)
+print(specific_purposes)
+```
+```{r}
+# Fix the correct Purpose of Visit based on the Main Purpose of Visit
+# New Purposes
+purpose_map <- list(
+  Leisure = c(
+    "Holiday/ Rest & Relax", "Visiting friends/ relatives (who are not international", "To take or join a regional or international cruise",
+    "Stopover (a planned stop of at least one night)", "Cultural Festivals (e.g. Lunar New Year, Deepavali, Hari",
+    "Sightseeing/ Attractions", "Company sponsored holiday/incentive programme (a. Venue of", "To shop/ attend shopping events in Singapore Event name",
+    "Music-related (e.g. concerts, festivals, etc) Event name", "Partying at clubs/ pubs/ dance parties (e.g. Avalon &",
+    "To visit the integrated resorts(e.g. Marina Bay Sands,", "To experience the food/ food events in Singapore Event name",
+    "Others (e.g. leisure exhibitions, cinema, recreational", "Personal Enrichment (cooking, batik painting class, etc)",
+    "Sporting (e.g. rugby matches, marathons, golf tournaments,", "Performing Arts (e.g. musicals, theatre, dance, opera, etc)",
+    "To experience different cultures", "To experience the nightlife in Singapore (e.g. all late", "Family Entertainment (e.g. kid’s music & theatre, ice/ magic"
+  ),
+  `Business + Accompanying Pax` = c(
+    "General business purpose", "Accompanying a business visitor", "Corporate/ business meetings   (a. Venue of corporate/",
+    "Convention/ conference", "Others - Work Related (e.g. visa, insurance, etc)", "Exhibition/ trade show",
+    "Job Opportunities"
+  ),
+  `Education + Accompanying Pax` = c(
+    "Visiting an international student (relative or friend)", "Accompanying an international student (relative or friend)",
+    "School trips", "Study mission (including government study trips)", "Gather information/ facts on the education services in",
+    "Skills development/ skills training/ vocational training", "In-house company training (Name of company)",
+    "Student enrichment programmes (e.g. language courses, camps,", "Executive training, including training workshops and",
+    "Student events (e.g. sports & other competitions, music"
+  ),
+  `Healthcare + Accompanying Pax` = c(
+    "Outpatient consultation/ treatment (e.g. with General", "In-patient (hospitalization) treatment", "Accompanying a healthcare/ medical visitor for Outpatient",
+    "Accompanying  a healthcare/ medical visitor for In-patient", "Day-surgery (with no hospitalization)", "Accompanying a healthcare/ medical visitor for Day-surgery",
+    "Gather information/ facts on the healthcare services in"
+  ),
+  `Others/Refused` = c(
+    "Others - Personal (e.g. weddings, funerals, etc)", "Pls specify", "Others, please specify", "Using Singapore as a hub to go to other destinations:", "Using Singapore as a hub to go to other destinations: Stop"
+  )
+)
+
+# Create a reverse lookup list
+reverse_map <- unlist(purpose_map)
+names(reverse_map) <- rep(names(purpose_map), sapply(purpose_map, length))
+
+# Create the new column with the general purpose
+data <- data %>%
+  mutate(`Purpose of Visit` = names(reverse_map[match(`Main Purpose of Visit`, reverse_map)]))
+```
+
+##### Illogical Data Entries for Travel Companions
+```{r}
+# Check for Incosistencies for Travel Companionship
+data %>% 
+  dplyr::select(starts_with("Travel companion")) %>% 
+  mutate_all(as.double) %>% 
+  rowSums() %>% table()
+
+data %>%
+  filter(`Travel companion - Alone`  == "1") %>% dplyr::select(starts_with("Travel companion")) %>% 
+  mutate_all(as.double) %>% 
+  rowSums() %>% table()
+```
+
+
+##### Explaratory Data Analysis
+```{r}
+# Viewing demographics of respondents
+k <- 10
+
+# Calculate the frequency of each category and select the top k
+top_k_data <- data %>%
+  count(`Country of Residence`) %>%
+  top_n(k, n) %>%
+  arrange(desc(n))
+
+# Generate the frequency count chart for the top k categories
+ggplot(top_k_data, aes(x = reorder(`Country of Residence`, -n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(title = paste("Top", k, "Most Frequent Country of Residence"),
+       x = "Country of Residence",
+       y = "Frequency") +
+  theme_minimal()
+```
+
+```{r}
+data_entry <- data %>%
+  summarize(
+    Air_Entry = sum(!is.na(Air_Terminal)), 
+    Land_Entry = sum(!is.na(Land_Terminal)), 
+    Sea_Entry = sum(!is.na(Sea_Terminal))
+  )
+
+# Reshape the data to a long format for easier plotting
+data_entry_long <- data_entry %>%
+  pivot_longer(everything(), names_to = "Entry_Type", values_to = "Count")
+
+ggplot(data_entry_long, aes(x = Entry_Type, y = Count)) +
+  geom_bar(stat = "identity") +
+  labs(title = "Count of Entry Type",
+       x = "Entry Type",
+       y = "Frequency") +
+  theme_minimal()
+
+```
+
+### Question 2
+#### Part 1: Clustering with Kmodes
+##### Feature Engineering
+```{r}
+# Mode of Entry
+data = data %>% mutate(
+  AirEntry = ifelse(!is.na(Air_Terminal),1,0),
+  LandEntry = ifelse(!is.na(Land_Terminal),1,0),
+  SeaEntry = ifelse(!is.na(Sea_Terminal),1,0),
+  )
+
+categorical_variables = c('Country of Residence', 'Purpose of Visit', 'AirEntry', 'LandEntry', 'SeaEntry', 'Gender', 'Marital Status','Travel companion - Alone' )
+
+data_for_clustering = data[categorical_variables]
+
+```
+
+```{r}
+# Run Kmodes
+
+costs <- numeric(10)
+
+for (k in 1:10) {
+  set.seed(42)
+  kmodes_result <- kmodes(data_for_clustering, modes = k, iter.max = 20, weighted = FALSE)
+  costs[k] <- kmodes_result$withindiff
+}
+
+# Plot the Elbow Method
+qplot(1:10, costs, geom = "line") +
+  labs(title = "Elbow Method for Optimal Number of Clusters", x = "Number of Clusters", y = "Total Within-cluster Simple-matching Distance") +
+  theme_minimal()
+```
+
+```{r}
+# Run K-Modes clustering
+set.seed(42)
+kmodes_result <- kmodes(data_for_clustering, modes = 5, iter.max = 10, weighted = FALSE)
+
+# Add cluster labels to the original dataset
+data_for_clustering$Cluster <- kmodes_result$cluster
+
+# Summarize the cluster profiles
+cluster_profiles <- data_for_clustering %>%
+  group_by(Cluster) %>%
+  summarize(across(everything(), ~ names(sort(table(.), decreasing = TRUE))[1]))
+
+print(cluster_profiles)
+
+# Count the number of observations in each cluster
+cluster_counts <- data_for_clustering %>%
+  group_by(Cluster) %>%
+  summarize(Count = n())
+
+# Combine dataframes to obtain statistics
+clusters <- inner_join(cluster_profiles, cluster_counts, by = "Cluster")
+
+print(clusters)
+```
+
+### Part 2
+#### Visitor Insights
+
+```{r}
+### Purpose of Visit
+data %>% count(`Purpose of Visit`) %>%
+  ggplot(aes(x = "", y = n, fill = `Purpose of Visit`)) +
+    geom_bar(stat = "identity", width = 1) +
+    coord_polar("y") +
+    labs(title = "Pie Chart of Purpose of Visit", x = "", y = "") +
+    theme_void() +
+    theme(legend.title = element_blank(), plot.title = element_text(size = 14, face = "bold"))
+
+### Main Purpose for Leisure
+k <- 5
+
+# Calculate the frequency of each category and select the top k
+top_k_data <- data %>%
+  filter(`Purpose of Visit` == "Leisure") %>%
+  count(`Main Purpose of Visit`) %>%
+  top_n(k, n) %>%
+  arrange(desc(n))
+
+# Generate the frequency count chart for the top k categories
+ggplot(top_k_data, aes(x = reorder(`Main Purpose of Visit`, -n), y = n)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = paste("Top", k, "Main Purpose of Visit for Leisure"),
+       x = "Main Purpose of Visit",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12),
+        axis.text.y = element_text(size = 12),
+        plot.title = element_text(size = 14, face = "bold"))
+
+### Main Purpose for Business
+# Calculate the frequency of each category and select the top k
+top_k_data_biz <- data %>%
+  filter(`Purpose of Visit` == "Business + Accompanying Pax") %>%
+  count(`Main Purpose of Visit`) %>%
+  top_n(k, n) %>%
+  arrange(desc(n))
+
+# Generate the frequency count chart for the top k categories
+ggplot(top_k_data_biz, aes(x = reorder(`Main Purpose of Visit`, -n), y = n)) +
+  geom_bar(stat = "identity") +
+  labs(title = paste("Top", k, "Main Purpose of Visit for Business"),
+       x = "Main Purpose of Visit",
+       y = "Frequency") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+
+
+### Duration of Stay by Purpose
+data %>% group_by(`Purpose of Visit`) %>% summarize(Duration = median(`Length of Stay`)) %>%
+  ggplot(aes(x=`Purpose of Visit`, y = `Duration`)) + geom_col() + labs(title = "Median Duration of Stay by Purpose") +
+      theme_minimal() + theme(legend.title = element_blank(), plot.title = element_text(size = 14, face = "bold")) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+### Gender and Marital Status
+ggplot(data, aes(x = `Gender`, fill = `Marital Status`)) +
+  geom_bar() +
+  labs(title = "Frequency Counts of Gender by Marital status", x = "Gender", y = "Count") + theme_minimal() + theme(plot.title = element_text(size = 14, face = "bold"))
+
+### Gender and First Time Visitors
+ggplot(data, aes(x = `Gender`, fill = `First Visit To Singapore`)) +
+  geom_bar() +
+  labs(title = "Frequency Counts of Gender by First Visit to Singapore", x = "Gender", y = "Count") + theme_minimal() + theme(plot.title = element_text(size = 14, face = "bold"))
+
+### Gender and Visiting Alone
+ggplot(data, aes(x = `Gender`, fill = `Travel companion - Alone`)) +
+  geom_bar() +
+  labs(title = "Frequency Counts of Gender by Visiting Alone", x = "Gender", y = "Count") + theme_minimal() + theme(plot.title = element_text(size = 14, face = "bold"))
+
+### Males Visiting Alone by Purpose
+data %>%
+  filter(`Gender` == "Male", `Travel companion - Alone` == 1) %>%
+  count(`Purpose of Visit`) %>%
+  ggplot(aes(x = reorder(`Purpose of Visit`, -n), y = n)) + 
+  geom_bar(stat = "identity", fill = "steelblue") +
+  labs(title = "Frequency Counts of Purpose of Visits by Males Travelling Alone", x = "Purpose", y = "Count") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1), plot.title = element_text(size = 14, face = "bold")) 
+
+
+### Gender and Travel Type
+ggplot(data, aes(x = `Gender`, fill = `Travel Type`)) +
+  geom_bar() +
+  labs(title = "Frequency Counts of Gender by Travel Type", x = "Gender", y = "Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+
+### Marital Status and Travel Type
+ggplot(data, aes(x = `Marital Status`, fill = `Travel Type`)) +
+  geom_bar() +
+  labs(title = "Frequency Counts of Marital Status by Travel Type", x = "Marital Status", y = "Count") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+```
+
+#### Travel Companion and Hotel
+```{r}
+### Filtering out inconsistent entries and reducing dataset size to correct entries
+corrections = data %>%
+  filter(`MainHotel` != max(as.double(`MainHotel`))) %>%
+  dplyr::select(starts_with("Travel companion")) %>% 
+  mutate_all(as.double) %>% 
+  rowSums()
+
+data_reduced = data %>% filter(`MainHotel` != max(as.double(`MainHotel`))) %>%
+  dplyr::select(`MainHotel`, starts_with("Travel companion")) %>%
+  mutate(corrections = corrections) %>%
+  filter(corrections != 0) %>% dplyr::select(-corrections)
+
+data_reduced
+```
+
+```{r}
+# Perform Chi-Square Test to determine correlation
+data$MainHotel <- as.factor(data$MainHotel)
+
+travel_companion_cols <- grep("^Travel companion", names(data), value = TRUE)
+
+results <- list()  
+
+for (col in travel_companion_cols) {
+  contingency_table <- table(data[[col]], data$MainHotel)
+  chi_square_result <- chisq.test(contingency_table)
+  results[[col]] <- list(
+    p_value = chi_square_result$p.value,
+    chi_square_statistic = chi_square_result$statistic,
+    conclusion = ifelse(chi_square_result$p.value < 0.01, 
+                        "Significant correlation", 
+                        "No significant correlation")
+  )
+}
+
+for (col in names(results)) {
+  cat("Results for:", col, "\n")
+  print(results[[col]])
+  cat("\n")
+}
+
+```
+
+#### Viewing Hotel Insights
+
+```{r}
+# load hotel dataset
+hotel_data = read_csv("data/hotel_info.csv") %>% mutate(MainHotel = as.factor(MainHotel))
+data_reduced = data_reduced %>% inner_join(hotel_data, by = "MainHotel")
+```
+```{r}
+# Create barplots to get top 5 hotels for each travel companion
+for (col in travel_companion_cols) {
+  
+  filtered_data <- data_reduced %>% dplyr::select(col, `Hotel_Name`) %>% filter(!!sym(col) == 1)
+  
+  print(filtered_data)
+  top_hotels <- filtered_data %>%
+    count(`Hotel_Name`) %>%
+    arrange(desc(n)) %>%
+    top_n(5, n)
+  
+  
+  dummy = ggplot(top_hotels, aes(x = reorder(`Hotel_Name`, -n), y = n)) +
+    geom_bar(stat = "identity", fill = "steelblue") +
+    theme_minimal() +
+    labs(title = paste("Top 5 Hotels for", col),
+         x = "Hotel",
+         y = "Frequency") +
+    theme_minimal() + 
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 8), plot.title = element_text(size = 14, face = "bold"))
+  
+  print(dummy)
+
+}
+
+```
+### K-Modes Analysis
+```{r}
+# All statistics
+row0 = data %>% summarise(across(where(is.numeric), mean))
+# Male Married Businessmen travelling alone
+row1 = data %>% filter(`Purpose of Visit` == "Business + Accompanying Pax", `Gender` == "Male", `Marital Status` == "Married", `Travel companion - Alone` == "1") %>% summarise(across(where(is.numeric), mean))
+# Married Couples travelling together for Leisure
+row2 = data %>% filter(`Purpose of Visit` == "Leisure", `Marital Status` == "Married", `Travel companion - Alone` == "0") %>% summarise(across(where(is.numeric), mean))
+# Single Females travelling with others for Leisure
+row3 = data %>% filter(`Purpose of Visit` == "Leisure", `Gender` == "Female", `Marital Status` == "Single", `Travel companion - Alone` == "0") %>% summarise(across(where(is.numeric), mean))
+
+# Combine Statistics
+cluster_statistics = bind_rows(row0,row1,row2,row3) %>% dplyr::select(-c(case,year,month,Weights_QTR)) %>% mutate(Group = c("All", "Cat1", "Cat2", "Cat3")) %>% dplyr::select(Group, everything())
+
+cluster_statistics
+```
+
+```{r}
+# Shopping Preference Analysis
+cluster_statistics_shopping = cluster_statistics %>% dplyr::select(Group, starts_with("shopping"))
+
+cluster_statistics_shopping %>% ggplot(aes(x = Group, y = shopping_consumertech)) + geom_col(fill = "steelblue") +
+  labs(title = "Shopping trends across clusters: Consumer Tech", x = "Cluster", y = "Mean") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+```
+```{r}
+# Expenditure Analysis
+cluster_statistics_expenditure = cluster_statistics %>% dplyr::select(Group, starts_with("tot"))
+
+cluster_statistics_expenditure %>% ggplot(aes(x = Group, y = tot.exp)) + geom_col(fill = "steelblue") +
+  labs(title = "Expenditure: Total", x = "Cluster", y = "Mean") +
+  theme_minimal() +
+  theme(plot.title = element_text(size = 14, face = "bold"))
+
+```
